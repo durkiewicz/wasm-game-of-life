@@ -1,27 +1,15 @@
 mod utils;
 
 use wasm_bindgen::prelude::*;
-use std::fmt;
-
-#[wasm_bindgen]
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cell {
-    Dead = 0,
-    Alive = 1,
-}
 
 #[wasm_bindgen]
 pub struct Universe {
     width: u32,
     height: u32,
-    cells: Vec<Cell>,
+    bytes: Vec<u8>,
 }
 
 impl Universe {
-    fn get_index(&self, row: u32, column: u32) -> usize {
-        (row * self.width + column) as usize
-    }
 
     fn live_neighbor_count(&self, row: u32, column: u32) -> u8 {
         let mut count = 0;
@@ -33,8 +21,9 @@ impl Universe {
 
                 let neighbor_row = (row + delta_row) % self.height;
                 let neighbor_col = (column + delta_col) % self.width;
-                let idx = self.get_index(neighbor_row, neighbor_col);
-                count += self.cells[idx] as u8;
+                if self.is_alive_at(neighbor_row, neighbor_col) {
+                    count += 1;
+                }
             }
         }
         count
@@ -52,79 +41,144 @@ impl Universe {
         self.height
     }
 
-    pub fn cells(&self) -> *const Cell {
-        self.cells.as_ptr()
+    pub fn cells(&self) -> *const u8 {
+        self.bytes.as_ptr()
+    }
+
+    pub fn is_alive_at(&self, row: u32, column: u32) -> bool {
+        let (index, shift) = get_index_and_shift(row, column, self.width);
+        self.bytes[index] & (1 << shift) != 0
     }
 
     pub fn tick(&mut self) {
-        let mut next = self.cells.clone();
+        let mut next = self.bytes.clone();
 
         for row in 0..self.height {
             for col in 0..self.width {
-                let idx = self.get_index(row, col);
-                let cell = self.cells[idx];
+                let is_alive = self.is_alive_at(row, col);
                 let live_neighbors = self.live_neighbor_count(row, col);
 
-                let next_cell = match (cell, live_neighbors) {
+                let next_cell = match (is_alive, live_neighbors) {
                     // Rule 1: Any live cell with fewer than two live neighbours
                     // dies, as if caused by underpopulation.
-                    (Cell::Alive, x) if x < 2 => Cell::Dead,
+                    (true, x) if x < 2 => false,
                     // Rule 2: Any live cell with two or three live neighbours
                     // lives on to the next generation.
-                    (Cell::Alive, 2) | (Cell::Alive, 3) => Cell::Alive,
+                    (true, 2) | (true, 3) => true,
                     // Rule 3: Any live cell with more than three live
                     // neighbours dies, as if by overpopulation.
-                    (Cell::Alive, x) if x > 3 => Cell::Dead,
+                    (true, x) if x > 3 => false,
                     // Rule 4: Any dead cell with exactly three live neighbours
                     // becomes a live cell, as if by reproduction.
-                    (Cell::Dead, 3) => Cell::Alive,
+                    (false, 3) => true,
                     // All other cells remain in the same state.
                     (otherwise, _) => otherwise,
                 };
 
-                next[idx] = next_cell;
+                set_alive_at(&mut next, row, col, self.width, next_cell);
             }
         }
 
-        self.cells = next;
+        self.bytes = next;
     }
 
     pub fn new() -> Universe {
-        let width = 64;
-        let height = 64;
+        let width: u32 = 64;
+        let height: u32 = 64;
+        let byte_len = (width * height + 7) / 8;
 
-        let cells = (0..width * height)
-            .map(|i| {
-                if i % 2 == 0 || i % 7 == 0 {
-                    Cell::Alive
-                } else {
-                    Cell::Dead
+        let bytes = (0..byte_len)
+            .enumerate()
+            .map(|(byte_index, _)| {
+                let mut byte: u8 = 0;
+                for bit_index in 0..8 {
+                    let index = byte_index * 8 + bit_index;
+                    if  index % 2 == 0 || index % 7 == 0 {
+                        byte |= 1 << (7 - bit_index);
+                    }
                 }
+                byte
             })
             .collect();
 
         Universe {
             width,
             height,
-            cells,
+            bytes,
         }
-    }
-
-    pub fn render(&self) -> String {
-        self.to_string()
     }
 }
 
-impl fmt::Display for Universe {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for line in self.cells.as_slice().chunks(self.width as usize) {
-            for &cell in line {
-                let symbol = if cell == Cell::Dead { '◻' } else { '◼' };
-                write!(f, "{}", symbol)?;
-            }
-            write!(f, "\n")?;
-        }
+fn get_index_and_shift(row: u32, column: u32, width: u32) -> (usize, usize) {
+    let index = (row * width + column) as usize;
+    (index / 8, 7 - (index % 8))
+}
 
-        Ok(())
+fn set_alive_at(bytes: &mut Vec<u8>, row: u32, column: u32, width: u32, alive: bool) {
+    let (index, shift) = get_index_and_shift(row, column, width);
+    if alive {
+        bytes[index] |= 1 << shift;
+    } else {
+        bytes[index] &= !(1 << shift);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    fn test_is_alive_at(bytes: Vec<u8>, width: u32, row: u32, column: u32, expected: bool) {
+        let universe = Universe {
+            width,
+            height: bytes.len() as u32 * 8 / width,
+            bytes,
+        };
+        assert_eq!(universe.is_alive_at(row, column), expected);
+    }
+
+    #[test]
+    fn test_is_alive_at_first_bit_when_last_bit_is_set() {
+        test_is_alive_at(vec![1], 4, 0, 0, false);
+    }
+
+    #[test]
+    fn test_is_alive_at_last_bit_when_last_bit_is_set() {
+        test_is_alive_at(vec![1], 4, 1, 3, true);
+    }
+
+    #[test]
+    fn test_is_alive_at_first_bit_when_first_bit_is_set() {
+        test_is_alive_at(vec![1 << 7], 4, 0, 0, true);
+    }
+
+    #[test]
+    fn test_is_alive_at_last_bit_when_first_bit_is_set() {
+        test_is_alive_at(vec![1 << 7], 4, 1, 3, false);
+    }
+
+    #[test]
+    fn test_tick() {
+        let mut universe = Universe {
+            width: 8,
+            height: 5,
+            bytes: vec![
+                0b00000000,
+                0b00000000,
+                0b01110000,
+                0b00000000,
+                0b00000000,
+            ]
+        };
+        universe.tick();
+        assert_eq!(
+            universe.bytes,
+            vec![
+                0b00000000,
+                0b00100000,
+                0b00100000,
+                0b00100000,
+                0b00000000,
+            ]
+        );
     }
 }

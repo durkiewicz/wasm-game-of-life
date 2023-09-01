@@ -1,5 +1,4 @@
-import { Universe, Cell } from "wasm-game-of-life";
-import {memory} from "wasm-game-of-life/wasm_game_of_life_bg.wasm";
+import { Universe } from "wasm-game-of-life";
 
 const CELL_SIZE = 5; // px
 const GRID_COLOR = "#CCCCCC";
@@ -19,10 +18,10 @@ const ctx = canvas.getContext('2d');
 requestAnimationFrame(renderLoop);
 
 function renderLoop () {
-    universe.tick();
 
     drawGrid();
     drawCells();
+    universe.tick();
 
     requestAnimationFrame(renderLoop);
 }
@@ -51,18 +50,13 @@ function getIndex(row, column) {
 }
 
 function drawCells() {
-    const cellsPtr = universe.cells();
-    const cells = new Uint8Array(memory.buffer, cellsPtr, width * height);
-
     ctx.beginPath();
 
     for (let row = 0; row < height; row++) {
         for (let col = 0; col < width; col++) {
-            const idx = getIndex(row, col);
-
-            ctx.fillStyle = cells[idx] === Cell.Dead
-                ? DEAD_COLOR
-                : ALIVE_COLOR;
+            ctx.fillStyle = universe.is_alive_at(row, col)
+                ? ALIVE_COLOR
+                : DEAD_COLOR;
 
             ctx.fillRect(
                 col * (CELL_SIZE + 1) + 1,
